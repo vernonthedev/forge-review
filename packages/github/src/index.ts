@@ -192,27 +192,6 @@ export async function fetchChangedFiles(
   return allFiles;
 }
 
-export async function fetchPullRequestDiff(
-  token: string,
-  owner: string,
-  repo: string,
-  pullNumber: number
-): Promise<string> {
-  const response = await fetch(`${GITHUB_API_URL}/repos/${owner}/${repo}/pulls/${pullNumber}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github.v3.diff',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch PR diff: ${response.statusText}`);
-  }
-
-  return response.text();
-}
-
 export function isBinaryFile(filename: string): boolean {
   const binaryExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.pdf', '.zip', '.tar', '.gz', '.exe', '.dll', '.so', '.dylib', '.class', '.jar', '.war', '.ear', '.woff', '.woff2', '.ttf', '.eot', '.otf'];
   return binaryExtensions.some(ext => filename.toLowerCase().endsWith(ext));
@@ -321,27 +300,6 @@ export async function createReview(token: string, params: CreateReviewParams): P
   });
 
   return response.json() as Promise<{ id: number; html_url: string }>;
-}
-
-export async function fetchExistingReviews(
-  token: string,
-  owner: string,
-  repo: string,
-  pullRequestNumber: number
-): Promise<Array<{ id: number; user: { login: string }; body: string }>> {
-  const response = await fetch(`${GITHUB_API_URL}/repos/${owner}/${repo}/pulls/${pullRequestNumber}/reviews`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch reviews: ${response.statusText}`);
-  }
-
-  return response.json() as Promise<Array<{ id: number; user: { login: string }; body: string }>>;
 }
 
 export async function fetchReviewComments(
