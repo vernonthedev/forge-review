@@ -1,57 +1,58 @@
-# Forge Review
+### Forge Review
 
 An independent GitHub AI code reviewer powered by configurable LLMs.
 
-## Overview
+### Overview
 
-Forge Review is a standalone GitHub App that automatically reviews pull requests using configurable OpenAI-compatible LLM providers. It operates independently of GitHub Actions - receiving webhook events, retrieving PR context through the GitHub API, performing AI code reviews, and publishing findings back to the PR as GitHub reviews with inline comments.
+Forge Review is a standalone GitHub App that automatically reviews pull requests using configurable OpenAI-compatible LLM providers. It operates independently of GitHub Actions: it receives webhook events, retrieves PR context through the GitHub API, performs AI code reviews, and publishes findings back to the PR as GitHub reviews with inline comments.
 
-## Features
+### Features
 
-- **GitHub App Integration**: Proper GitHub App authentication with installation-scoped tokens
-- **Configurable LLM Providers**: Support for any OpenAI-compatible API (NVIDIA NIM, OpenRouter, DeepSeek, Together, Groq, vLLM, self-hosted)
-- **Repository Configuration**: Per-repo configuration via `.github/forge-review.yml`
-- **Custom Guidelines**: Repository-specific review guidelines via `.github/forge-review.md`
-- **Structured Reviews**: JSON-structured LLM output with validation
-- **Finding Verification**: Optional second-pass verification to reduce false positives
-- **Incremental Reviews**: Avoids duplicate comments on synchronize events
-- **Async Processing**: Webhook acknowledges quickly, review runs in background
-- **Security-First**: Webhook signature verification, prompt injection protection, no code execution
+- GitHub App authentication with installation-scoped tokens
+- Configurable LLM providers: any OpenAI-compatible API (NVIDIA NIM, OpenRouter, DeepSeek, Together, Groq, vLLM, self-hosted)
+- Repository configuration via `.github/forge-review.yml` with YAML and JSON support
+- Custom review guidelines via `.github/forge-review.md`
+- Structured JSON reviews validated with Zod
+- Second-pass finding verification to reduce false positives
+- Incremental reviews that avoid duplicate comments on synchronize events
+- Commit statuses showing pending, success, and failure per review
+- Async processing: webhooks acknowledge in milliseconds, reviews run in the background
+- Security-first: signature verification, trusted-base configuration, no code execution
 
-## Architecture
+### Architecture
 
-```
+```text
 forge-review/
 ├── apps/
 │   └── api/                 # Hono HTTP server
 ├── packages/
-│   ├── github/              # GitHub API client & webhook handling
+│   ├── github/              # GitHub API client and webhook handling
 │   ├── llm/                 # LLM provider abstraction
 │   ├── review-engine/       # Review orchestration
-│   ├── config/              # Configuration parsing & validation
-│   └── shared/              # Shared types & utilities
+│   ├── config/              # Configuration parsing and validation
+│   └── shared/              # Shared types and utilities
 ```
 
-## Quick Start
+A review flows through receive, context collection, model review, verification, publishing, and completion stages, with every step tagged by a correlation ID.
 
-### Prerequisites
+### Quick Start
+
+#### Prerequisites
 
 - Node.js 20+
 - pnpm 9+
 - GitHub App credentials
 
-### Installation
+#### Installation
 
 ```bash
-# Clone and install dependencies
 pnpm install
-
-# Copy environment variables
 cp .env.example .env
-# Edit .env with your credentials
 ```
 
-### Environment Variables
+Edit `.env` with your credentials.
+
+#### Environment Variables
 
 ```env
 GITHUB_APP_ID=your-app-id
@@ -66,31 +67,29 @@ PORT=3000
 NODE_ENV=development
 ```
 
-### Development
+The LLM variables set the default provider. A repository can override provider and model in its own configuration file.
+
+#### Development
 
 ```bash
-# Start development server
 pnpm dev
-
-# Run tests
 pnpm test
-
-# Type checking
 pnpm typecheck
-
-# Linting
 pnpm lint
 ```
 
+See `docs/github-app-setup.md` for the full setup walkthrough, including tunnel-based local development.
+
 ### GitHub App Setup
 
-1. Create a GitHub App in your organization settings
-2. Configure permissions:
-   - Repository permissions: Contents (Read), Pull requests (Read & Write), Metadata (Read)
-   - Subscribe to: Pull request events
-3. Set webhook URL to `https://your-domain.com/webhooks/github`
-4. Generate and save the private key
-5. Install the app on target repositories
+1. Create a GitHub App in your organization settings.
+2. Configure permissions: Contents (Read), Pull requests (Read and Write), Metadata (Read).
+3. Subscribe to Pull request events.
+4. Set the webhook URL to `https://your-domain.com/webhooks/github`.
+5. Generate and save the private key.
+6. Install the app on target repositories.
+
+See `docs/github-app-setup.md` for the complete fourteen-step guide.
 
 ### Repository Configuration
 
@@ -120,9 +119,9 @@ guidelines:
   path: ".github/forge-review.md"
 ```
 
-Create `.github/forge-review.md` with your review guidelines.
+Both camelCase and snake_case review keys are accepted. Configuration is read from the trusted base branch, so a pull request cannot disable its own review. Create `.github/forge-review.md` with your review guidelines; it is treated as review context, never as executable instructions.
 
-## Supported LLM Providers
+### Supported LLM Providers
 
 Any OpenAI-compatible API:
 
@@ -134,14 +133,45 @@ Any OpenAI-compatible API:
 - vLLM
 - Self-hosted endpoints
 
-## Security
+### Status Checks
 
-- All webhook payloads verified via HMAC-SHA256
-- Repository content treated as untrusted input
-- Prompt injection protection via strict instruction hierarchy
-- No code execution during review
-- No access to environment secrets from repository content
+Every review posts a Forge Review commit status on the head commit: pending while the review runs, success with the finding count when it completes, and failure only when the reviewer itself fails. Findings never fail the check, so Forge Review is informational by default and never blocks merges until you opt into enforcement.
 
-## License
+### Testing
+
+```bash
+pnpm test
+```
+
+Tests use Vitest with mocks at every external boundary. No test requires GitHub credentials or live model calls. Coverage spans configuration parsing, webhook verification, diff handling, structured LLM responses, finding validation, verification, and review publishing.
+
+### Deployment
+
+Build the container image and run it with your environment file:
+
+```bash
+docker build -t forge-review .
+docker run --env-file .env -p 3000:3000 forge-review
+```
+
+The service needs an HTTPS webhook endpoint, quick webhook acknowledgement with asynchronous review processing, and secret management through environment variables. The container runs the compiled API on `PORT` and keeps background reviews alive for the process lifetime. For platforms with execution-duration limits, run the image on a long-lived host rather than a short-lived function.
+
+### Security
+
+- All webhook payloads verified via HMAC-SHA256 with delivery replay protection
+- Repository configuration loaded from the trusted base branch, never the PR head
+- Service API keys never sent to repository-overridden model URLs
+- Repository content treated as untrusted input with prompt hierarchy enforcement
+- No code execution during review and no access to environment secrets from repository content
+
+### Roadmap
+
+Planned extension points, intentionally not built yet:
+
+- Issue and commit review alongside pull request review
+- Security and dependency focused review modes
+- Automated fix suggestions as follow-up commits
+
+### License
 
 MIT
