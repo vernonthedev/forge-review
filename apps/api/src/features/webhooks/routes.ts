@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { verifyWebhookSignature, extractInstallationId, extractRepository, extractPullRequestInfo, isSupportedEvent, createInstallationToken } from '@forge-review/github';
+import { verifyWebhookSignature, extractInstallationId, extractRepository, extractPullRequestInfo, isSupportedEvent, createInstallationToken, createCommitStatus } from '@forge-review/github';
 import { loadRepositoryConfig, loadGuidelines, createReviewEngine } from '@forge-review/review-engine';
 import { createCorrelationId } from '@forge-review/shared';
 import { mergeConfigWithEnvDefaults } from '@forge-review/config';
@@ -111,21 +111,58 @@ webhookRoutes.post('/', async (c) => {
       eventType: webhookPayload.action,
     };
 
-    c.executionCtx.waitUntil(
-      engine.executeReview(reviewContext).then(
-        (job: { startedAt: Date; result?: { findings: unknown[] }; stage: string }) => {
-          const duration = Date.now() - job.startedAt.getTime();
-          console.log(
-            `[${correlationId}] Review completed for PR #${pullRequest.number} in ${duration}ms ` +
-            `(findings: ${job.result?.findings.length ?? 0}, stage: ${job.stage})`
-          );
-        },
-        (error: Error) => {
-          const duration = Date.now() - startTime;
-          console.error(`[${correlationId}] Review failed for PR #${pullRequest.number} in ${duration}ms:`, error);
-        }
-      )
+    await createCommitStatus(installationToken.token, {
+      owner: repository.owner,
+      repo: repository.name,
+      sha: pullRequest.headSha,
+      state: 'pending',
+      description: 'Forge Review is analyzing this PR',
+    }).catch((error: unknown) => {
+      console.log(`[${correlationId}] Failed to post pending status:`, error instanceof Error ? error.message : error);
+    });
+
+    const reviewPromise = engine.executeReview(reviewContext).then(
+      async (job: { startedAt: Date; result?: { findings: Array<{ severity: string }> }; stage: string }) => {
+        const duration = Date.now() - job.startedAt.getTime();
+        const findings = job.result?.findings ?? [];
+        const summary = findings.length === 0
+          ? 'Forge Review completed: no findings'
+          : `Forge Review completed: ${findings.length} finding${findings.length === 1 ? '' : 's'}`;
+        console.log(
+          `[${correlationId}] Review completed for PR #${pullRequest.number} in ${duration}ms ` +
+          `(findings: ${findings.length}, stage: ${job.stage})`
+        );
+        await createCommitStatus(installationToken.token, {
+          owner: repository.owner,
+          repo: repository.name,
+          sha: pullRequest.headSha,
+          state: 'success',
+          description: summary,
+        }).catch((error: unknown) => {
+          console.log(`[${correlationId}] Failed to post success status:`, error instanceof Error ? error.message : error);
+        });
+      },
+      async (error: Error) => {
+        const duration = Date.now() - startTime;
+        console.error(`[${correlationId}] Review failed for PR #${pullRequest.number} in ${duration}ms:`, error);
+        await createCommitStatus(installationToken.token, {
+          owner: repository.owner,
+          repo: repository.name,
+          sha: pullRequest.headSha,
+          state: 'failure',
+          description: `Forge Review failed: ${error.message}`,
+        }).catch((statusError: unknown) => {
+          console.log(`[${correlationId}] Failed to post failure status:`, statusError instanceof Error ? statusError.message : statusError);
+        });
+      }
     );
+
+    const executionContext = c.executionCtx as { waitUntil?: (promise: Promise<unknown>) => void } | undefined;
+    if (typeof executionContext?.waitUntil === 'function') {
+      executionContext.waitUntil(reviewPromise);
+    } else {
+      void reviewPromise;
+    }
 
     return c.json({ received: true, reviewId: correlationId }, 202);
   } catch (error) {
