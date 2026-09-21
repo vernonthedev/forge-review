@@ -15,6 +15,10 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@forge-review/config": "workspace:^",
+    "@forge-review/github": "workspace:^",
+    "@forge-review/review-engine": "workspace:^",
+    "@forge-review/shared": "workspace:^",
     "@hono/node-server": "^2.1.1",
     "@vercel/functions": "^3.9.8",
     "hono": "^4.6.0",
