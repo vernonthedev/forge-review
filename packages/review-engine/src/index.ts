@@ -1,5 +1,5 @@
 import { createCorrelationId } from '@forge-review/shared';
-import { fetchChangedFiles, fetchRepositoryConfig, fetchGuidelines, createReview, generateFindingId, type ReviewComment, isBinaryFile, truncatePatch } from '@forge-review/github';
+import { fetchChangedFiles, fetchRepositoryConfig, fetchGuidelines, createReview, fetchReviewComments, generateFindingId, type ReviewComment, isBinaryFile, truncatePatch } from '@forge-review/github';
 import { createProvider, type ReviewModel, type ProviderConfig, type ModelResponse } from '@forge-review/llm';
 import { parseRepositoryConfig, getDefaultConfig, type RepositoryConfig } from '@forge-review/config';
 import type {
@@ -26,6 +26,7 @@ export interface ReviewContext {
   token: string;
   config: RepositoryConfig;
   guidelines?: string;
+  eventType: 'opened' | 'reopened' | 'synchronize';
   previousReviewSha?: string;
 }
 
@@ -76,6 +77,36 @@ export class ReviewEngine {
       }
 
       job.stage = 'PUBLISHING';
+      const finalResult = job.result!;
+      
+      if (context.config.review.incremental && context.eventType === 'synchronize') {
+        const existingComments = await fetchReviewComments(
+          context.token,
+          context.repository.owner,
+          context.repository.name,
+          context.pullRequest.number
+        );
+        
+        const existingFindingIds = new Set<string>();
+        for (const comment of existingComments) {
+          const findingId = comment.body.match(/<!-- forge-review:finding:([^>]+) -->/);
+          if (findingId) existingFindingIds.add(findingId[1]);
+        }
+        
+        const newFindings = finalResult.findings.filter((f) => 
+          !existingFindingIds.has(`${f.file}:${f.line}:${f.title}`.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 50))
+        );
+        
+        if (newFindings.length === 0) {
+          console.log(`[${context.correlationId}] Incremental review: no new findings for PR #${context.pullRequest.number}`);
+          job.stage = 'COMPLETED';
+          job.completedAt = new Date();
+          return job;
+        }
+        
+        job.result = { ...finalResult, findings: newFindings };
+      }
+      
       await this.publishReview(context, job.result!);
 
       job.stage = 'COMPLETED';
@@ -96,7 +127,8 @@ export class ReviewEngine {
       context.repository.owner,
       context.repository.name,
       context.pullRequest.baseSha,
-      context.pullRequest.headSha
+      context.pullRequest.headSha,
+      context.pullRequest.number
     );
     return files.map((f) => ({
       filename: f.filename,
@@ -267,14 +299,25 @@ Respond with a JSON object containing:
     return lines;
   }
 
+  private filterFindingsForPublish(findings: ReviewFinding[], config: RepositoryConfig): ReviewFinding[] {
+    const severityOrder = { critical: 4, high: 3, medium: 2, low: 1 };
+    const threshold = severityOrder[config.review.severityThreshold] ?? 2;
+
+    return findings
+      .filter((f) => severityOrder[f.severity] >= threshold)
+      .filter((f) => f.confidence >= 0.7)
+      .slice(0, config.review.maxComments);
+  }
+
   private async publishReview(context: ReviewContext, result: ReviewResult): Promise<void> {
-    const comments: ReviewComment[] = result.findings.map((finding) => ({
+    const filteredFindings = this.filterFindingsForPublish(result.findings, context.config);
+    const comments: ReviewComment[] = filteredFindings.map((finding) => ({
       path: finding.file,
       line: finding.line,
       body: `${this.formatFinding(finding)}\n\n${generateFindingId(finding.file, finding.line, finding.title)}`,
     }));
 
-    const event = this.determineReviewEvent(result.findings);
+    const event = this.determineReviewEvent(filteredFindings);
 
     await createReview(context.token, {
       owner: context.repository.owner,
@@ -332,8 +375,9 @@ export async function loadGuidelines(
   token: string,
   owner: string,
   repo: string,
-  ref: string
+  ref: string,
+  path: string = '.github/forge-review.md'
 ): Promise<string | undefined> {
-  const content = await fetchGuidelines(token, owner, repo, ref);
+  const content = await fetchGuidelines(token, owner, repo, ref, path);
   return content || undefined;
 }

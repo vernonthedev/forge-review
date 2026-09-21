@@ -96,7 +96,27 @@ async function generateAppJwt(auth: GitHubAppAuth): Promise<string> {
   return `${signingInput}.${encodedSignature}`;
 }
 
+function encodeDerLength(length: number): number[] {
+  if (length < 128) return [length];
+  const bytes: number[] = [];
+  let remaining = length;
+  while (remaining > 0) {
+    bytes.unshift(remaining & 0xff);
+    remaining >>= 8;
+  }
+  return [0x80 | bytes.length, ...bytes];
+}
+
+function wrapPkcs1InPkcs8(pkcs1Der: Uint8Array<ArrayBufferLike>): Uint8Array<ArrayBuffer> {
+  const rsaAlgorithmId = [0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00];
+  const algorithmSequence = [0x30, ...encodeDerLength(rsaAlgorithmId.length), ...rsaAlgorithmId];
+  const octetString = [0x04, ...encodeDerLength(pkcs1Der.length), ...pkcs1Der];
+  const body = [0x02, 0x01, 0x00, ...algorithmSequence, ...octetString];
+  return new Uint8Array([0x30, ...encodeDerLength(body.length), ...body]);
+}
+
 async function importPrivateKey(pem: string): Promise<CryptoKey> {
+  const isPkcs1 = pem.includes('-----BEGIN RSA PRIVATE KEY-----');
   const pemContents = pem
     .replace('-----BEGIN PRIVATE KEY-----', '')
     .replace('-----END PRIVATE KEY-----', '')
@@ -104,7 +124,11 @@ async function importPrivateKey(pem: string): Promise<CryptoKey> {
     .replace('-----END RSA PRIVATE KEY-----', '')
     .replace(/\s/g, '');
 
-  const binaryDer = Uint8Array.from(atob(pemContents), (c) => c.charCodeAt(0));
+  let binaryDer = Uint8Array.from(atob(pemContents), (c) => c.charCodeAt(0));
+
+  if (isPkcs1) {
+    binaryDer = wrapPkcs1InPkcs8(binaryDer);
+  }
 
   return crypto.subtle.importKey('pkcs8', binaryDer, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
 }
@@ -113,23 +137,54 @@ export async function fetchChangedFiles(
   token: string,
   owner: string,
   repo: string,
-  baseSha: string,
-  headSha: string
+  _baseSha: string,
+  _headSha: string,
+  pullNumber?: number
 ): Promise<Array<{ filename: string; status: string; patch?: string; additions: number; deletions: number }>> {
-  const response = await fetch(`${GITHUB_API_URL}/repos/${owner}/${repo}/compare/${baseSha}...${headSha}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-  });
+  if (!pullNumber) {
+    const response = await fetch(`${GITHUB_API_URL}/repos/${owner}/${repo}/compare/${_baseSha}...${_headSha}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch changed files: ${response.statusText}`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch changed files: ${response.statusText}`);
+    }
+
+    const data = (await response.json()) as { files: Array<{ filename: string; status: string; patch?: string; additions: number; deletions: number }> };
+    return data.files;
   }
 
-  const data = (await response.json()) as { files: Array<{ filename: string; status: string; patch?: string; additions: number; deletions: number }> };
-  return data.files;
+  const allFiles: Array<{ filename: string; status: string; patch?: string; additions: number; deletions: number }> = [];
+  let page = 1;
+  const perPage = 100;
+
+  while (true) {
+    const response = await fetch(`${GITHUB_API_URL}/repos/${owner}/${repo}/pulls/${pullNumber}/files?per_page=${perPage}&page=${page}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch PR files: ${response.statusText}`);
+    }
+
+    const files = (await response.json()) as Array<{ filename: string; status: string; patch?: string; additions: number; deletions: number }>;
+    if (files.length === 0) break;
+
+    allFiles.push(...files);
+
+    if (files.length < perPage) break;
+    page++;
+  }
+
+  return allFiles;
 }
 
 export async function fetchPullRequestDiff(
@@ -188,7 +243,7 @@ export async function fetchFileContent(
 
   const data = (await response.json()) as { content: string; encoding: string };
   if (data.encoding === 'base64') {
-    return atob(data.content);
+    return Buffer.from(data.content, 'base64').toString('utf8');
   }
   return data.content;
 }
@@ -206,9 +261,10 @@ export async function fetchGuidelines(
   token: string,
   owner: string,
   repo: string,
-  ref: string
+  ref: string,
+  path: string = '.github/forge-review.md'
 ): Promise<string | null> {
-  return fetchFileContent(token, owner, repo, '.github/forge-review.md', ref);
+  return fetchFileContent(token, owner, repo, path, ref);
 }
 
 export interface ReviewComment {
