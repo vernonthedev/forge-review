@@ -58,13 +58,27 @@ exclude:
   it('handles malformed JSON', () => {
     const { config, errors } = parseRepositoryConfig('invalid: [');
     expect(errors.length).toBeGreaterThan(0);
-    expect(config.enabled).toBe(true);
+    expect(config.enabled).toBe(false);
   });
 
   it('handles malformed YAML', () => {
     const { config, errors } = parseRepositoryConfig('invalid: [');
     expect(errors.length).toBeGreaterThan(0);
-    expect(config.enabled).toBe(true);
+    expect(config.enabled).toBe(false);
+  });
+
+  it('accepts documented snake_case review keys', () => {
+    const yaml = `
+review:
+  severity_threshold: high
+  max_comments: 10
+  verify_findings: false
+`;
+    const { config, errors } = parseRepositoryConfig(yaml);
+    expect(errors).toHaveLength(0);
+    expect(config.review.severityThreshold).toBe('high');
+    expect(config.review.maxComments).toBe(10);
+    expect(config.review.verifyFindings).toBe(false);
   });
 
   it('getDefaultConfig returns sensible defaults', () => {

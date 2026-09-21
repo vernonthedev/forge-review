@@ -16,11 +16,19 @@ export const modelConfigSchema = z.object({
 });
 
 export const reviewConfigSchema = z.object({
-  severityThreshold: severitySchema.default('medium'),
-  maxComments: z.number().int().positive().max(50).default(15),
-  incremental: z.boolean().default(true),
-  verifyFindings: z.boolean().default(true),
-});
+  severityThreshold: severitySchema.optional(),
+  severity_threshold: severitySchema.optional(),
+  maxComments: z.number().int().positive().max(50).optional(),
+  max_comments: z.number().int().positive().max(50).optional(),
+  incremental: z.boolean().optional(),
+  verifyFindings: z.boolean().optional(),
+  verify_findings: z.boolean().optional(),
+}).transform(({ severityThreshold, severity_threshold, maxComments, max_comments, incremental, verifyFindings, verify_findings }) => ({
+  severityThreshold: severityThreshold ?? severity_threshold ?? 'medium',
+  maxComments: maxComments ?? max_comments ?? 15,
+  incremental: incremental ?? true,
+  verifyFindings: verifyFindings ?? verify_findings ?? true,
+}));
 
 export const guidelinesConfigSchema = z.object({
   path: z.string().default('.github/forge-review.md'),
@@ -45,6 +53,11 @@ export type ReviewConfigInput = z.input<typeof reviewConfigSchema>;
 export type GuidelinesConfigInput = z.input<typeof guidelinesConfigSchema>;
 export type RepositoryConfigInput = z.input<typeof repositoryConfigSchema>;
 
+export interface EnvConfigDefaults {
+  llmBaseUrl?: string;
+  llmModel?: string;
+}
+
 function parseContent(content: string): unknown {
   const trimmed = content.trim();
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
@@ -58,20 +71,44 @@ export function parseRepositoryConfig(content: string): { config: RepositoryConf
     const parsed = parseContent(content);
     const result = repositoryConfigSchema.safeParse(parsed);
     if (!result.success) {
+      const failClosedConfig = repositoryConfigSchema.parse({});
       return {
-        config: repositoryConfigSchema.parse({}),
+        config: { ...failClosedConfig, enabled: false },
         errors: result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
       };
     }
     return { config: result.data, errors: [] };
   } catch (error) {
+    const failClosedConfig = repositoryConfigSchema.parse({});
     return {
-      config: repositoryConfigSchema.parse({}),
+      config: { ...failClosedConfig, enabled: false },
       errors: [error instanceof Error ? error.message : 'Invalid YAML/JSON format'],
     };
   }
 }
 
-export function getDefaultConfig(): RepositoryConfig {
-  return repositoryConfigSchema.parse({});
+export function getDefaultConfig(envDefaults?: EnvConfigDefaults): RepositoryConfig {
+  const baseConfig = repositoryConfigSchema.parse({});
+  if (!envDefaults) return baseConfig;
+
+  return {
+    ...baseConfig,
+    model: {
+      ...baseConfig.model,
+      baseUrl: envDefaults.llmBaseUrl ?? baseConfig.model.baseUrl,
+      model: envDefaults.llmModel ?? baseConfig.model.model,
+    },
+  };
+}
+
+export function mergeConfigWithEnvDefaults(config: RepositoryConfig, envDefaults?: EnvConfigDefaults): RepositoryConfig {
+  if (!envDefaults) return config;
+  return {
+    ...config,
+    model: {
+      ...config.model,
+      baseUrl: config.model.baseUrl ?? envDefaults.llmBaseUrl,
+      model: config.model.model ?? envDefaults.llmModel,
+    },
+  };
 }
