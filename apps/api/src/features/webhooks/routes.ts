@@ -122,15 +122,23 @@ webhookRoutes.post('/', async (c) => {
     });
 
     const reviewPromise = engine.executeReview(reviewContext).then(
-      async (job: { startedAt: Date; result?: { findings: Array<{ severity: string }> }; stage: string }) => {
+      async (job: {
+        startedAt: Date;
+        result?: { findings: Array<{ severity: string }> };
+        stage: string;
+        usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+      }) => {
         const duration = Date.now() - job.startedAt.getTime();
         const findings = job.result?.findings ?? [];
         const summary = findings.length === 0
           ? 'Forge Review completed: no findings'
           : `Forge Review completed: ${findings.length} finding${findings.length === 1 ? '' : 's'}`;
+        const tokens = job.usage
+          ? `tokens_in=${job.usage.promptTokens} tokens_out=${job.usage.completionTokens} tokens_total=${job.usage.totalTokens}`
+          : 'tokens=unavailable';
         console.log(
           `[${correlationId}] Review completed for PR #${pullRequest.number} in ${duration}ms ` +
-          `(findings: ${findings.length}, stage: ${job.stage})`
+          `(findings: ${findings.length}, stage: ${job.stage}, provider=${mergedConfig.model.provider}, model=${mergedConfig.model.model}, ${tokens})`
         );
         await createCommitStatus(installationToken.token, {
           owner: repository.owner,
