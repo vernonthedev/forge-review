@@ -147,15 +147,21 @@ Tests use Vitest with mocks at every external boundary. No test requires GitHub 
 
 ### Deployment
 
-Build once, then run the compiled server on a long-lived Node host:
+Deploy the repository to Vercel. The serverless entry in `api/` serves the API under `/api/*` after `pnpm run build` compiles the workspace.
+
+Set these environment variables in the Vercel dashboard before the first deploy: `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and `NVIDIA_API_KEY`, plus optional `LLM_BASE_URL`, `LLM_MODEL`, and `PORT`. Missing required values fail the deployment fast with named fields.
+
+Point the GitHub App webhook URL at `https://<your-project>.vercel.app/api/webhooks/github`.
+
+Function timeouts bound review length: the Hobby plan allows 60 seconds per execution, so large reviews can be cut off. Raise `maxDuration` in `vercel.json` as far as your plan allows, and keep diffs and verification budgets compact enough to fit inside the limit.
+
+For local runs outside Vercel, build once and start the compiled server directly:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm run build
 PORT=3000 node apps/api/dist/index.js
 ```
-
-Provide configuration through environment variables (see `.env.example`, never commit secrets) and terminate TLS in front of the service with a reverse proxy so the webhook URL is HTTPS. Keep the process alive with systemd, pm2, or your platform service manager, since reviews run in-process in the background. Avoid short-lived function platforms with execution-duration limits.
 
 ### Security
 
