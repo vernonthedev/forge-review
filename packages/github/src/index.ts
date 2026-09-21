@@ -1,4 +1,5 @@
 import { createHmac } from 'crypto';
+import { withRetry, HttpError } from '@forge-review/shared';
 import type { WebhookPayload, ReviewEventType } from '@forge-review/shared';
 
 export const GITHUB_API_URL = 'https://api.github.com';
@@ -56,18 +57,22 @@ export function isSupportedEvent(action: string): action is ReviewEventType {
 
 export async function createInstallationToken(auth: GitHubAppAuth, installationId: number): Promise<InstallationToken> {
   const jwt = await generateAppJwt(auth);
-  const response = await fetch(`${GITHUB_API_URL}/app/installations/${installationId}/access_tokens`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${jwt}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-  });
+  const response = await withRetry(async () => {
+    const attempted = await fetch(`${GITHUB_API_URL}/app/installations/${installationId}/access_tokens`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
 
-  if (!response.ok) {
-    throw new Error(`Failed to create installation token: ${response.statusText}`);
-  }
+    if (!attempted.ok) {
+      throw new HttpError(attempted.status, `Failed to create installation token: ${attempted.statusText}`);
+    }
+
+    return attempted;
+  });
 
   const data = (await response.json()) as { token: string; expires_at: string };
   return { token: data.token, expiresAt: data.expires_at };
@@ -285,31 +290,35 @@ export interface CreateReviewParams {
 }
 
 export async function createReview(token: string, params: CreateReviewParams): Promise<{ id: number; html_url: string }> {
-  const response = await fetch(`${GITHUB_API_URL}/repos/${params.owner}/${params.repo}/pulls/${params.pullRequestNumber}/reviews`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      commit_id: params.commitSha,
-      body: params.body,
-      event: params.event,
-      comments: params.comments.map((c) => ({
-        path: c.path,
-        line: c.line,
-        body: c.body,
-        side: c.side ?? 'RIGHT',
-      })),
-    }),
-  });
+  const response = await withRetry(async () => {
+    const attempted = await fetch(`${GITHUB_API_URL}/repos/${params.owner}/${params.repo}/pulls/${params.pullRequestNumber}/reviews`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        commit_id: params.commitSha,
+        body: params.body,
+        event: params.event,
+        comments: params.comments.map((c) => ({
+          path: c.path,
+          line: c.line,
+          body: c.body,
+          side: c.side ?? 'RIGHT',
+        })),
+      }),
+    });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to create review: ${error}`);
-  }
+    if (!attempted.ok) {
+      const error = await attempted.text();
+      throw new HttpError(attempted.status, `Failed to create review: ${error}`);
+    }
+
+    return attempted;
+  });
 
   return response.json() as Promise<{ id: number; html_url: string }>;
 }
@@ -390,23 +399,30 @@ export interface CreateCommitStatusParams {
 export const FORGE_REVIEW_STATUS_CONTEXT = 'Forge Review';
 
 export async function createCommitStatus(token: string, params: CreateCommitStatusParams): Promise<void> {
-  const response = await fetch(`${GITHUB_API_URL}/repos/${params.owner}/${params.repo}/statuses/${params.sha}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      state: params.state,
-      description: params.description.slice(0, 140),
-      context: params.context ?? FORGE_REVIEW_STATUS_CONTEXT,
-    }),
-  });
+  await withRetry(
+    async () => {
+      const attempted = await fetch(`${GITHUB_API_URL}/repos/${params.owner}/${params.repo}/statuses/${params.sha}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          state: params.state,
+          description: params.description.slice(0, 140),
+          context: params.context ?? FORGE_REVIEW_STATUS_CONTEXT,
+        }),
+      });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to create commit status: ${error}`);
-  }
+      if (!attempted.ok) {
+        const error = await attempted.text();
+        throw new HttpError(attempted.status, `Failed to create commit status: ${error}`);
+      }
+
+      return attempted;
+    },
+    { maxAttempts: 2 }
+  );
 }
