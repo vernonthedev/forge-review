@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import * as yaml from 'js-yaml';
 import type { RepositoryConfig, ModelConfig, ReviewConfig, GuidelinesConfig, Severity } from '@forge-review/shared';
 
 export type { RepositoryConfig, ModelConfig, ReviewConfig, GuidelinesConfig, Severity } from '@forge-review/shared';
@@ -44,9 +45,17 @@ export type ReviewConfigInput = z.input<typeof reviewConfigSchema>;
 export type GuidelinesConfigInput = z.input<typeof guidelinesConfigSchema>;
 export type RepositoryConfigInput = z.input<typeof repositoryConfigSchema>;
 
+function parseContent(content: string): unknown {
+  const trimmed = content.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    return JSON.parse(content);
+  }
+  return yaml.load(content);
+}
+
 export function parseRepositoryConfig(content: string): { config: RepositoryConfig; errors: string[] } {
   try {
-    const parsed = z.object({}).passthrough().parse(JSON.parse(content));
+    const parsed = parseContent(content);
     const result = repositoryConfigSchema.safeParse(parsed);
     if (!result.success) {
       return {
@@ -55,10 +64,10 @@ export function parseRepositoryConfig(content: string): { config: RepositoryConf
       };
     }
     return { config: result.data, errors: [] };
-  } catch {
+  } catch (error) {
     return {
       config: repositoryConfigSchema.parse({}),
-      errors: ['Invalid YAML/JSON format'],
+      errors: [error instanceof Error ? error.message : 'Invalid YAML/JSON format'],
     };
   }
 }
