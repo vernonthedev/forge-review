@@ -226,8 +226,8 @@ Respond with a JSON object containing:
     if (!verification) return 'uncertain';
 
     const title = verification.title.toLowerCase();
-    if (title.includes('valid') || title.includes('confirmed')) return 'valid';
     if (title.includes('invalid') || title.includes('false positive')) return 'invalid';
+    if (title.includes('valid') || title.includes('confirmed')) return 'valid';
     return 'uncertain';
   }
 
