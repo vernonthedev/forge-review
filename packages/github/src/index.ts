@@ -375,3 +375,38 @@ export function generateFindingId(file: string, line: number, title: string): st
   const hash = `${file}:${line}:${title}`.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 50);
   return `${hash}_${Date.now().toString(36)}`;
 }
+
+export type CommitStatusState = 'pending' | 'success' | 'failure' | 'error';
+
+export interface CreateCommitStatusParams {
+  owner: string;
+  repo: string;
+  sha: string;
+  state: CommitStatusState;
+  description: string;
+  context?: string;
+}
+
+export const FORGE_REVIEW_STATUS_CONTEXT = 'Forge Review';
+
+export async function createCommitStatus(token: string, params: CreateCommitStatusParams): Promise<void> {
+  const response = await fetch(`${GITHUB_API_URL}/repos/${params.owner}/${params.repo}/statuses/${params.sha}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      state: params.state,
+      description: params.description.slice(0, 140),
+      context: params.context ?? FORGE_REVIEW_STATUS_CONTEXT,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to create commit status: ${error}`);
+  }
+}

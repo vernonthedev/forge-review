@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHmac } from 'crypto';
 import {
   verifyWebhookSignature,
@@ -10,6 +10,7 @@ import {
   isForgeReviewComment,
   extractFindingId,
   createFindingMarker,
+  createCommitStatus,
 } from './index';
 
 describe('github utilities', () => {
@@ -108,6 +109,42 @@ describe('github utilities', () => {
     it('detects forge review comments', () => {
       expect(isForgeReviewComment('Some text <!-- forge-review:finding:abc --> more text')).toBe(true);
       expect(isForgeReviewComment('Regular comment')).toBe(false);
+    });
+  });
+
+  describe('createCommitStatus', () => {
+    const mockFetch = vi.fn();
+
+    beforeEach(() => {
+      vi.stubGlobal('fetch', mockFetch);
+      mockFetch.mockReset();
+    });
+
+    it('posts pending, success, and failure states', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+      for (const state of ['pending', 'success', 'failure'] as const) {
+        await createCommitStatus('token', { owner: 'o', repo: 'r', sha: 'abc123', state, description: 'desc' });
+      }
+
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(mockFetch.mock.calls[0][0]).toContain('/repos/o/r/statuses/abc123');
+      expect(JSON.parse(options.body as string)).toMatchObject({ state: 'pending', context: 'Forge Review' });
+    });
+
+    it('truncates long descriptions to 140 characters', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+      await createCommitStatus('token', { owner: 'o', repo: 'r', sha: 'abc', state: 'success', description: 'x'.repeat(200) });
+      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect((JSON.parse(options.body as string).description as string).length).toBeLessThanOrEqual(140);
+    });
+
+    it('throws on API failure', async () => {
+      mockFetch.mockResolvedValue({ ok: false, text: async () => 'boom' });
+      await expect(
+        createCommitStatus('token', { owner: 'o', repo: 'r', sha: 'abc', state: 'failure', description: 'desc' })
+      ).rejects.toThrow('Failed to create commit status');
     });
   });
 });
