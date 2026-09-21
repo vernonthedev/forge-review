@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { healthRoutes } from './features/health/routes.js';
@@ -18,7 +20,10 @@ app.get('/', (c) => {
 
 const port = parseInt(process.env.PORT ?? '3000', 10);
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const invokedPath = process.argv[1];
+const isMainModule = invokedPath !== undefined && fileURLToPath(import.meta.url) === resolve(invokedPath);
+
+if (isMainModule) {
   serve({ fetch: app.fetch, port });
   console.log(`Forge Review server running on http://localhost:${port}`);
 }
