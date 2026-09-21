@@ -129,7 +129,7 @@ async function importPrivateKey(pem: string): Promise<CryptoKey> {
     .replace('-----END RSA PRIVATE KEY-----', '')
     .replace(/\s/g, '');
 
-  let binaryDer = Uint8Array.from(atob(pemContents), (c) => c.charCodeAt(0));
+  let binaryDer = new Uint8Array(Buffer.from(pemContents, 'base64'));
 
   if (isPkcs1) {
     binaryDer = wrapPkcs1InPkcs8(binaryDer);
