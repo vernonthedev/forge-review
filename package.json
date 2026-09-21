@@ -2,6 +2,7 @@
   "name": "forge-review",
   "version": "0.0.0",
   "private": true,
+  "author": "vernonthedev",
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
