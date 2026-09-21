@@ -1,0 +1,20 @@
+{
+  "$schema": "https://oxlint.dev/schema.json",
+  "rules": {
+    "correctness": "error",
+    "suspicious": "error",
+    "complexity": "warn",
+    "performance": "warn",
+    "style": "warn",
+    "perf": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.spec.ts"],
+      "rules": {
+        "no-explicit-any": "off"
+      }
+    }
+  ],
+  "ignorePatterns": ["node_modules", "dist", "*.config.*"]
+}
