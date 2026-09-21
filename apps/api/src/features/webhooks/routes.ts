@@ -2,7 +2,11 @@ import { Hono } from 'hono';
 import { verifyWebhookSignature, extractInstallationId, extractRepository, extractPullRequestInfo, isSupportedEvent, createInstallationToken } from '@forge-review/github';
 import { loadRepositoryConfig, loadGuidelines, createReviewEngine } from '@forge-review/review-engine';
 import { createCorrelationId } from '@forge-review/shared';
+import { mergeConfigWithEnvDefaults } from '@forge-review/config';
 import type { WebhookPayload } from '@forge-review/shared';
+
+const processedDeliveries = new Set<string>();
+const MAX_PROCESSED_DELIVERIES = 10000;
 
 const webhookRoutes = new Hono<{
   Bindings: {
@@ -33,6 +37,19 @@ webhookRoutes.post('/', async (c) => {
       return c.json({ received: true }, 202);
     }
 
+    const deliveryId = c.req.header('x-github-delivery');
+    if (deliveryId) {
+      if (processedDeliveries.has(deliveryId)) {
+        console.log(`[${correlationId}] Duplicate delivery ID detected: ${deliveryId}`);
+        return c.json({ received: true, duplicate: true }, 202);
+      }
+      if (processedDeliveries.size >= MAX_PROCESSED_DELIVERIES) {
+        const firstKey = processedDeliveries.values().next().value;
+        if (firstKey) processedDeliveries.delete(firstKey);
+      }
+      processedDeliveries.add(deliveryId);
+    }
+
     const webhookPayload = JSON.parse(payload) as WebhookPayload;
 
     if (!isSupportedEvent(webhookPayload.action)) {
@@ -51,23 +68,34 @@ webhookRoutes.post('/', async (c) => {
       installationId
     );
 
-    const [config, guidelines] = await Promise.all([
-      loadRepositoryConfig(installationToken.token, repository.owner, repository.name, pullRequest.headSha),
-      loadGuidelines(installationToken.token, repository.owner, repository.name, pullRequest.headSha),
-    ]);
+    const config = await loadRepositoryConfig(installationToken.token, repository.owner, repository.name, pullRequest.baseSha);
+    
+    const envDefaults = {
+      llmBaseUrl: c.env.LLM_BASE_URL,
+      llmModel: c.env.LLM_MODEL,
+    };
+    const mergedConfig = mergeConfigWithEnvDefaults(config, envDefaults);
 
-    if (!config.enabled) {
+    const guidelines = await loadGuidelines(
+      installationToken.token,
+      repository.owner,
+      repository.name,
+      pullRequest.baseSha,
+      mergedConfig.guidelines?.path ?? '.github/forge-review.md'
+    );
+
+    if (!mergedConfig.enabled) {
       console.log(`[${correlationId}] Review disabled for ${repository.fullName}`);
       return c.json({ received: true, skipped: true }, 202);
     }
 
     const providerConfig = {
-      provider: config.model.provider,
-      baseUrl: config.model.baseUrl ?? c.env.LLM_BASE_URL,
-      model: config.model.model,
-      apiKey: config.model.apiKey ?? c.env.NVIDIA_API_KEY,
-      temperature: config.model.temperature,
-      maxTokens: config.model.maxTokens,
+      provider: mergedConfig.model.provider,
+      baseUrl: mergedConfig.model.baseUrl ?? 'https://integrate.api.nvidia.com/v1',
+      model: mergedConfig.model.model,
+      apiKey: mergedConfig.model.apiKey ?? (mergedConfig.model.baseUrl ? undefined : c.env.NVIDIA_API_KEY),
+      temperature: mergedConfig.model.temperature,
+      maxTokens: mergedConfig.model.maxTokens,
     };
 
     const engine = await createReviewEngine(providerConfig);
@@ -78,8 +106,9 @@ webhookRoutes.post('/', async (c) => {
       repository,
       pullRequest,
       token: installationToken.token,
-      config,
+      config: mergedConfig,
       guidelines,
+      eventType: webhookPayload.action,
     };
 
     c.executionCtx.waitUntil(
