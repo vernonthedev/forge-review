@@ -132,6 +132,37 @@ export async function fetchChangedFiles(
   return data.files;
 }
 
+export async function fetchPullRequestDiff(
+  token: string,
+  owner: string,
+  repo: string,
+  pullNumber: number
+): Promise<string> {
+  const response = await fetch(`${GITHUB_API_URL}/repos/${owner}/${repo}/pulls/${pullNumber}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github.v3.diff',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch PR diff: ${response.statusText}`);
+  }
+
+  return response.text();
+}
+
+export function isBinaryFile(filename: string): boolean {
+  const binaryExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.pdf', '.zip', '.tar', '.gz', '.exe', '.dll', '.so', '.dylib', '.class', '.jar', '.war', '.ear', '.woff', '.woff2', '.ttf', '.eot', '.otf'];
+  return binaryExtensions.some(ext => filename.toLowerCase().endsWith(ext));
+}
+
+export function truncatePatch(patch: string, maxLength: number): string {
+  if (patch.length <= maxLength) return patch;
+  return patch.slice(0, maxLength) + '\n... (truncated)';
+}
+
 export async function fetchFileContent(
   token: string,
   owner: string,
