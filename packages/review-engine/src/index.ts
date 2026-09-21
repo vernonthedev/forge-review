@@ -1,5 +1,5 @@
 import { createCorrelationId } from '@forge-review/shared';
-import { fetchChangedFiles, fetchRepositoryConfig, fetchGuidelines, createReview, generateFindingId, type ReviewComment } from '@forge-review/github';
+import { fetchChangedFiles, fetchRepositoryConfig, fetchGuidelines, createReview, generateFindingId, type ReviewComment, isBinaryFile, truncatePatch } from '@forge-review/github';
 import { createProvider, type ReviewModel, type ProviderConfig, type ModelResponse } from '@forge-review/llm';
 import { parseRepositoryConfig, getDefaultConfig, type RepositoryConfig } from '@forge-review/config';
 import type {
@@ -26,6 +26,7 @@ export interface ReviewContext {
   token: string;
   config: RepositoryConfig;
   guidelines?: string;
+  previousReviewSha?: string;
 }
 
 export interface ReviewJob {
@@ -41,6 +42,8 @@ export interface ReviewJob {
 
 export class ReviewEngine {
   private model: ReviewModel;
+  private readonly maxPatchSize = 50000;
+  private readonly maxTotalPatchSize = 200000;
 
   constructor(providerConfig: ProviderConfig) {
     this.model = createProvider(providerConfig);
@@ -58,16 +61,17 @@ export class ReviewEngine {
       job.stage = 'COLLECTING_CONTEXT';
       const changedFiles = await this.collectChangedFiles(context);
       const filteredFiles = this.filterFiles(changedFiles, context.config.exclude);
+      const processedFiles = this.processFiles(filteredFiles);
 
       job.stage = 'REVIEWING';
-      const reviewInput = this.buildReviewInput(context, filteredFiles);
+      const reviewInput = this.buildReviewInput(context, processedFiles);
       const result = await this.model.review(reviewInput);
       job.result = result;
       job.usage = (this.model as any).lastUsage;
 
       if (context.config.review.verifyFindings) {
         job.stage = 'VERIFYING';
-        const verifiedFindings = await this.verifyFindings(context, result.findings, filteredFiles);
+        const verifiedFindings = await this.verifyFindings(context, result.findings, processedFiles);
         job.result = { ...result, findings: verifiedFindings };
       }
 
@@ -106,8 +110,24 @@ export class ReviewEngine {
   private filterFiles(files: ChangedFile[], excludePatterns: string[]): ChangedFile[] {
     return files.filter((file) => {
       if (file.status === 'deleted') return false;
+      if (isBinaryFile(file.filename)) return false;
       if (!file.patch || file.patch.length === 0) return false;
       return !excludePatterns.some((pattern) => this.matchPattern(file.filename, pattern));
+    });
+  }
+
+  private processFiles(files: ChangedFile[]): ChangedFile[] {
+    let totalSize = 0;
+    return files.map((file) => {
+      let patch = file.patch || '';
+      if (patch.length > this.maxPatchSize) {
+        patch = truncatePatch(patch, this.maxPatchSize);
+      }
+      totalSize += patch.length;
+      if (totalSize > this.maxTotalPatchSize) {
+        patch = truncatePatch(patch, Math.max(0, this.maxTotalPatchSize - (totalSize - patch.length)));
+      }
+      return { ...file, patch };
     });
   }
 
@@ -133,23 +153,82 @@ export class ReviewEngine {
     };
   }
 
+  private buildVerificationPrompt(finding: ReviewFinding): string {
+    return `You are verifying a code review finding. Determine if this finding is valid, invalid, or uncertain.
+
+Finding to verify:
+- File: ${finding.file}:${finding.line}
+- Title: ${finding.title}
+- Description: ${finding.body}
+- Severity: ${finding.severity}
+- Category: ${finding.category}
+- Confidence: ${finding.confidence}
+${finding.suggestion ? `- Suggestion: ${finding.suggestion}` : ''}
+
+Respond with a JSON object containing:
+{
+  "summary": "Brief assessment",
+  "findings": [
+    {
+      "severity": "low",
+      "category": "other",
+      "file": "verification",
+      "line": 1,
+      "title": "valid|invalid|uncertain",
+      "body": "Explanation of verification result",
+      "confidence": 0.9
+    }
+  ]
+}`;
+  }
+
   private async verifyFindings(
     context: ReviewContext,
     findings: ReviewFinding[],
     changedFiles: ChangedFile[]
   ): Promise<ReviewFinding[]> {
-    const validFindings: ReviewFinding[] = [];
+    if (findings.length === 0) return [];
+
+    const verifiedFindings: ReviewFinding[] = [];
 
     for (const finding of findings) {
       const isValid = this.validateFinding(finding, changedFiles, context.pullRequest.headSha);
-      if (isValid) {
-        validFindings.push(finding);
+      if (!isValid) {
+        console.log(`[${context.correlationId}] Rejected finding (validation): ${finding.file}:${finding.line} - ${finding.title}`);
+        continue;
+      }
+
+      const verification = await this.verifyFindingWithModel(context, finding);
+      if (verification === 'valid') {
+        verifiedFindings.push(finding);
       } else {
-        console.log(`[${context.correlationId}] Rejected finding: ${finding.file}:${finding.line} - ${finding.title}`);
+        console.log(`[${context.correlationId}] Rejected finding (verification): ${finding.file}:${finding.line} - ${finding.title} (${verification})`);
       }
     }
 
-    return validFindings.slice(0, context.config.review.maxComments);
+    return verifiedFindings.slice(0, context.config.review.maxComments);
+  }
+
+  private async verifyFindingWithModel(context: ReviewContext, finding: ReviewFinding): Promise<'valid' | 'invalid' | 'uncertain'> {
+    this.buildVerificationPrompt(finding); // Build prompt for potential future use
+    const result = await this.model.review({
+      ...this.buildReviewInput(context, []),
+      pullRequest: {
+        ...context.pullRequest,
+        title: `Verification: ${finding.title}`,
+        description: `Verify if this finding is valid:\n\n${finding.body}`,
+      },
+      changedFiles: [],
+      repositoryConfig: { ...context.config, review: { ...context.config.review, verifyFindings: false } },
+    });
+
+    const verification = result.findings[0];
+    if (!verification) return 'uncertain';
+
+    const title = verification.title.toLowerCase();
+    if (title.includes('valid') || title.includes('confirmed')) return 'valid';
+    if (title.includes('invalid') || title.includes('false positive')) return 'invalid';
+    return 'uncertain';
   }
 
   private validateFinding(finding: ReviewFinding, changedFiles: ChangedFile[], _headSha: string): boolean {
