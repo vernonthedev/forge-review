@@ -147,14 +147,15 @@ Tests use Vitest with mocks at every external boundary. No test requires GitHub 
 
 ### Deployment
 
-Build the container image and run it with your environment file:
+Build once, then run the compiled server on a long-lived Node host:
 
 ```bash
-docker build -t forge-review .
-docker run --env-file .env -p 3000:3000 forge-review
+pnpm install --frozen-lockfile
+pnpm run build
+PORT=3000 node apps/api/dist/index.js
 ```
 
-The service needs an HTTPS webhook endpoint, quick webhook acknowledgement with asynchronous review processing, and secret management through environment variables. The container runs the compiled API on `PORT` and keeps background reviews alive for the process lifetime. For platforms with execution-duration limits, run the image on a long-lived host rather than a short-lived function.
+Provide configuration through environment variables (see `.env.example`, never commit secrets) and terminate TLS in front of the service with a reverse proxy so the webhook URL is HTTPS. Keep the process alive with systemd, pm2, or your platform service manager, since reviews run in-process in the background. Avoid short-lived function platforms with execution-duration limits.
 
 ### Security
 
