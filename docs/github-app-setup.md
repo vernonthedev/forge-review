@@ -12,7 +12,7 @@ Set the homepage URL to the public address where Forge Review will run, for exam
 
 ### Configure the Webhook URL
 
-Enable the webhook and set the webhook URL to `https://forge-review.example.com/webhooks/github`. For local development, expose your machine with a tunnel (see the local development section below) and use the tunnel URL instead.
+Enable the webhook and set the webhook URL to `https://forge-review.example.com/webhooks/github`. On Vercel the API carries an `/api` prefix, so use `https://<your-project>.vercel.app/api/webhooks/github` instead. For local development, expose your machine with a tunnel (see the local development section below) and use the tunnel URL instead.
 
 ### Configure the Webhook Secret
 

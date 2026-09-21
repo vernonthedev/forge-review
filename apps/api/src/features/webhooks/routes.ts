@@ -9,6 +9,26 @@ import type { WebhookPayload } from '@forge-review/shared';
 const processedDeliveries = new Set<string>();
 const MAX_PROCESSED_DELIVERIES = 10000;
 
+async function scheduleBackgroundWork(
+  context: { executionCtx?: unknown },
+  promise: Promise<unknown>
+): Promise<void> {
+  try {
+    const vercelFunctions = await import('@vercel/functions');
+    vercelFunctions.waitUntil(promise);
+    return;
+  } catch {
+    // Not running on Vercel: fall through to runtime-agnostic handling.
+  }
+
+  const executionContext = context.executionCtx as { waitUntil?: (promise: Promise<unknown>) => void } | undefined;
+  if (typeof executionContext?.waitUntil === 'function') {
+    executionContext.waitUntil(promise);
+  } else {
+    void promise;
+  }
+}
+
 export function createWebhookRoutes(environment: AppEnv) {
   const webhookRoutes = new Hono();
 
@@ -158,12 +178,7 @@ export function createWebhookRoutes(environment: AppEnv) {
         }
       );
 
-      const executionContext = c.executionCtx as { waitUntil?: (promise: Promise<unknown>) => void } | undefined;
-      if (typeof executionContext?.waitUntil === 'function') {
-        executionContext.waitUntil(reviewPromise);
-      } else {
-        void reviewPromise;
-      }
+      void scheduleBackgroundWork(c, reviewPromise);
 
       return c.json({ received: true, reviewId: correlationId }, 202);
     } catch (error) {
