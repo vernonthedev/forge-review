@@ -106,6 +106,27 @@ describe('ReviewEngine', () => {
     expect(isValid).toBe(false);
   });
 
+  it('filters findings below threshold, low confidence, and beyond maxComments', () => {
+    const engine = new ReviewEngine({ provider: 'test', baseUrl: 'https://api.test.com', model: 'test', apiKey: 'key' });
+    const config = {
+      enabled: true,
+      model: { provider: 'test', model: 'test-model' },
+      review: { severityThreshold: 'high', maxComments: 1, incremental: true, verifyFindings: false },
+      exclude: [],
+    };
+
+    const findings = [
+      { severity: 'medium', category: 'other', file: 'a.ts', line: 1, title: 'below threshold', body: 'b', confidence: 0.9 },
+      { severity: 'high', category: 'security', file: 'b.ts', line: 1, title: 'low confidence', body: 'b', confidence: 0.5 },
+      { severity: 'high', category: 'security', file: 'c.ts', line: 1, title: 'kept one', body: 'b', confidence: 0.9 },
+      { severity: 'critical', category: 'security', file: 'd.ts', line: 1, title: 'kept two', body: 'b', confidence: 0.9 },
+    ];
+
+    const filtered = (engine as any).filterFindingsForPublish(findings, config);
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].title).toBe('kept one');
+  });
+
   it('determines review event from findings', () => {
     const engine = new ReviewEngine({ provider: 'test', baseUrl: 'https://api.test.com', model: 'test', apiKey: 'key' });
 
