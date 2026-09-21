@@ -21,6 +21,18 @@ importers:
 
   apps/api:
     dependencies:
+      '@forge-review/config':
+        specifier: workspace:^
+        version: link:../../packages/config
+      '@forge-review/github':
+        specifier: workspace:^
+        version: link:../../packages/github
+      '@forge-review/review-engine':
+        specifier: workspace:^
+        version: link:../../packages/review-engine
+      '@forge-review/shared':
+        specifier: workspace:^
+        version: link:../../packages/shared
       '@hono/node-server':
         specifier: ^2.1.1
         version: 2.1.1(hono@4.13.8)
